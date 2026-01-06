@@ -1,0 +1,632 @@
+---
+title: "Multinomial Modeling and Post-Stratification of 2021 Canadian Vote Choice"
+author: "Kaamil Shaikh, Ibrahim Nabi, Raihan Amin"
+date: November 13, 2025
+subtitle: STA304 - Assignment 2
+format: pdf
+editor: visual
+toc: true
+toc-depth: 1
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+library(tidyverse)
+library(dplyr)
+library(nnet)
+library(scales)
+library(broom)
+library(stringr)
+library(patchwork)
+```
+
+\newpage
+
+# 1 Introduction
+
+The goal of this analysis is to estimate national support for the Liberal, Conservative, and New Democratic parties by combining 2021 Canadian Election Study (CES) survey responses with demographic information from the 2021 Canadian Census. While the CES provides detailed, individual-level data on voter characteristics and party preferences, its sample does not perfectly represent the Canadian population. Post-stratification allows us to address this gap by weighting model predictions according to the true demographic composition of Canada, producing population-level estimates that are more accurate and meaningful.
+
+This topic is especially important in the context of Canadian federal elections, where small shifts in demographic groups can meaningfully influence national outcomes. For example, the CES shows substantial variation in vote choice across age, education, income, and visible minority groups, yet these same groups often appear unevenly in survey samples (Stephenson et al., 2022). At the same time, past research demonstrates that post-stratification can significantly improve predictions when surveys underrepresent key populations (Wang et al., 2015). Since Canadian politics is shaped by strong regional identities and a competitive multi-party system, demographic adjustments are essential for capturing real patterns in voter behaviour.
+
+By modelling vote choice using multinomial logistic regression and then applying census-based weights, this analysis aims to produce a clearer picture of how Canadians would distribute their support across the three major parties. In doing so, we evaluate whether demographic factors alone such as province, age, gender, education, income, visible minority status, marital status, and religion can meaningfully predict national voting patterns. The findings contribute to a broader understanding of survey accuracy, demographic influences on elections, and the potential of statistical methods like post-stratification to improve election forecasting in Canada.
+
+# 2 Data
+
+The analysis draws on two primary data sources: the **2021 Canadian Election Study (CES)** and the **2021 Canadian Census**. The CES provides individual-level survey data collected during the 2021 federal election period and includes questions on political attitudes, vote choice, and sociodemographic characteristics. Respondents were recruited using probability-based sampling methods to approximate the Canadian voting-age population. In contrast, the 2021 Census of Population is a national enumeration conducted by Statistics Canada, providing near-complete demographic and socioeconomic information for all Canadians. Using these two datasets together allows us to relate demographic patterns from the census to individual-level voting behaviour observed in the CES.
+
+```{r, include = FALSE}
+
+# Here you can load in and clean the census data (you may need to do the cleaning in a separate R script). 
+
+census_data <- read_csv("canada_census2021.csv")
+
+# You may need additional chunks, in case you want to include some of the cleaning output.
+
+```
+
+```{r, include = FALSE}
+census_clean <- census_data %>%
+  transmute(
+    province = case_when(
+      pr == 10 ~ "Newfoundland and Labrador",
+      pr == 11 ~ "Prince Edward Island",
+      pr == 12 ~ "Nova Scotia",
+      pr == 13 ~ "New Brunswick",
+      pr == 24 ~ "Quebec",
+      pr == 35 ~ "Ontario",
+      pr == 46 ~ "Manitoba",
+      pr == 47 ~ "Saskatchewan",
+      pr == 48 ~ "Alberta",
+      pr == 59 ~ "British Columbia",
+      pr == 70 ~ "Northern Canada"
+    ),
+    age_group = factor(case_when(
+      agegrp %in% 7:8 ~ "18-24",
+      agegrp %in% 9:10 ~ "25-34",
+      agegrp %in% 11:13 ~ "35-49",
+      agegrp %in% 14:16 ~ "50-64",
+      agegrp %in% 17:21 ~ "65+"
+    ), levels = c("18-24","25-34","35-49","50-64","65+")),
+    marital_status = case_when(
+      marsth %in% c(2,3) ~ "Married/Partnered",
+      marsth %in% c(4,5,6) ~ "Previously Married",
+      marsth == 1 ~ "Never Married",
+      TRUE ~ NA_character_
+    ),
+    gender = if_else(gender == 1, "Woman", "Man"),
+    education = case_when(
+      hdgree <= 2 ~ "High school or less",
+      hdgree %in% 3:8 ~ "College or trades",
+      hdgree %in% 9:13 ~ "University",
+      TRUE ~ NA_character_
+    ),
+    income_group = case_when(
+      cfinc %in% 1:9 ~ "Under 25k",
+      cfinc %in% 10:14 ~ "25k-50k",
+      cfinc %in% 15:22 ~ "50k-90k",
+      cfinc %in% 22:33 ~ "90k+",
+      TRUE ~ NA_character_
+    ),
+    visible_minority = if_else(vismin == 1, "Not visible minority", "Visible minority"),
+    religion = case_when(
+      relig == 1 ~ "Buddhist",
+      relig %in% c(2:16) ~ "Christian",
+      relig == 17 ~ "Hindu",
+      relig == 18 ~ "Jewish",
+      relig == 19 ~ "Muslim",
+      relig == 20 ~ "Sikh",
+      relig == 21 ~ "Other religion",
+      relig == 22 ~ "No religion",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  drop_na()
+```
+
+Both datasets required cleaning and harmonization prior to analysis to ensure that variables were comparable. The census data originally contained numeric codes for all demographic fields (e.g., province codes, education categories, religion groups). These codes were converted into meaningful text labels following the 2021 Census codebook. Age was grouped into five categories—18–24, 25–34, 35–49, 50–64, and 65+—to match the distribution used in the CES. Similarly, education levels were collapsed into three broad groups (High school or less, College or trades, University), and total household income was categorized into four brackets: *Under \$25k*, *\$25k–50k*, *\$50k–90k*, and *\$90k+*. Marital status, visible minority status, gender, and religion were also simplified into consistent categories across both datasets. Records with unavailable or non-responsive entries were removed, ensuring a clean and complete dataset for post-stratification.
+
+```{r, include = FALSE}
+
+# Here you can load in and clean the survey data (you may want to do the cleaning in a separate R script). 
+
+# We can load it in:
+survey_data <- read_csv("ces2021.csv")
+
+```
+
+```{r, include = FALSE}
+survey_clean <- survey_data %>%
+  transmute(
+    vote_choice = case_when(
+  cps21_votechoice == 1 ~ "Liberal",
+  cps21_votechoice == 2 ~ "Conservative",
+  cps21_votechoice == 3 ~ "NDP",
+  TRUE ~ NA_character_
+),
+    province = case_when(
+  cps21_province == 1  ~ "Alberta",
+  cps21_province == 2  ~ "British Columbia",
+  cps21_province == 3  ~ "Manitoba",
+  cps21_province == 4  ~ "New Brunswick",
+  cps21_province == 5  ~ "Newfoundland and Labrador",
+  cps21_province == 6  ~ "Northern Canada",
+  cps21_province == 7  ~ "Nova Scotia",
+  cps21_province == 8  ~ "Northern Canada",
+  cps21_province == 9  ~ "Ontario",
+  cps21_province == 10 ~ "Prince Edward Island",
+  cps21_province == 11 ~ "Quebec",
+  cps21_province == 12 ~ "Saskatchewan",
+  cps21_province == 13 ~ "Northern Canada",
+  TRUE ~ NA_character_
+),
+    age_group = cut(cps21_age,
+                    breaks = c(17,24,34,49,64,Inf),
+                    labels = c("18-24","25-34","35-49","50-64","65+")),
+    marital_status = case_when(
+      cps21_marital %in% c(1,2) ~ "Married/Partnered",
+      cps21_marital %in% c(3,4,5) ~ "Previously Married",
+      cps21_marital == 6 ~ "Never Married",
+      TRUE ~ NA_character_
+    ),
+    gender = case_when(
+      cps21_genderid == 1 ~ "Man",
+      cps21_genderid == 2 ~ "Woman",
+      TRUE ~ NA_character_
+    ),
+    education = case_when(
+      cps21_education <= 5 ~ "High school or less",
+      cps21_education %in% 6:7 ~ "College or trades",
+      cps21_education %in% 8:11 ~ "University",
+      TRUE ~ NA_character_
+    ),
+    income_group = case_when(# change to income_number
+      cps21_income_number < 25000 ~ "Under 25k",
+      cps21_income_number >= 25000 & cps21_income_number < 50000 ~ "25k-50k",
+      cps21_income_number >= 50000 & cps21_income_number < 90000 ~ "50k-90k",
+      cps21_income_number >= 90000  ~ "90k+",
+      TRUE ~ NA_character_
+    ),
+    visible_minority = case_when(
+      cps21_vismin_9 == 1 | cps21_vismin_11 == 1 ~ "Not visible minority",
+      TRUE ~ "Visible minority"
+    ),
+    religion = case_when(
+      cps21_religion %in% c(8:21) ~ "Christian",
+      cps21_religion == 3 ~ "Buddhist",
+      cps21_religion == 4 ~ "Hindu",
+      cps21_religion == 5 ~ "Jewish",
+      cps21_religion == 6 ~ "Sikh",
+      cps21_religion == 7 ~ "Muslim",
+      cps21_religion %in% c(1,2) ~ "No religion",
+      cps21_religion == 22 ~ "Other religion",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  drop_na(vote_choice)
+```
+
+The CES data were cleaned using the exact same classification system to guarantee compatibility with the census. The key dependent variable, **vote_choice**, was constructed using respondents’ vote intention (`cps21_votechoice`) and restricted to the three major federal parties: Liberal, Conservative, and NDP. Province codes were mapped to their corresponding province names, and age was binned into the same five groups used for the census. Education, income, religion, visible minority status, marital status, and gender were all recoded to align with the census definitions. Respondents missing a valid vote choice were removed, resulting in a final analytic sample of **4,435 CES respondents**. All data processing was conducted in **R 4.x** using the *tidyverse* suite of packages.
+
+```{r, include = FALSE}
+
+#### You will need to update/clean the code below based off the variables you want to use in your poststratification.
+
+## Note: Whatever variables were chosen from the survey data need to match what's in the census data (variable names and categories)
+
+summary(survey_clean)
+summary(census_clean)
+table(survey_clean$province)
+table(survey_clean$vote_choice)
+
+map(list("province","age_group","marital_status","gender",
+           "education","income_group","visible_minority","religion"),
+      ~table(survey_clean[[.x]], useNA="ifany"))
+"
+survey_data <- 
+  survey_data %>% 
+  mutate(age = cps21_age,
+         prov = cps21_province,
+         vote_liberal = ifelse(cps21_votechoice==1, 1, 0)) %>% 
+  select(age, prov, vote_liberal)
+
+census_data <- census_data %>% 
+  mutate(age=round(agegrp),
+         prov=pr) %>% ## Note: needs better cleaning (to match survey)
+  select(age, prov)
+"
+```
+
+Across these datasets, eight variables were retained for use in the modeling stage: **province**, **age group**, **marital status**, **gender**, **education**, **income**, **visible minority status**, and **religion**. These variables were chosen because they represent core sociodemographic factors that consistently predict political behaviour in Canada. Province captures regional political cultures; age, gender, and marital status reflect social and life-cycle dynamics; education and income represent socioeconomic status; and visible minority status and religion capture identity-based and cultural factors relevant to political preferences. Together, they provide a comprehensive demographic profile suitable for predicting party support.
+
+#### Table 1: Summary of Key Demographic Variables in the 2021 CES Survey
+
+|                      |                                                           |                       |
+|-----------------|--------------------------------------|-----------------|
+| **Variable**         | **Categories**                                            | **Percentage (%)**    |
+| **Age Group**        | 18–24 / 25–34 / 35–49 / 50–64 / 65+                       | 7 / 16 / 22 / 28 / 26 |
+| **Gender**           | Man / Woman                                               | 45 / 55               |
+| **Marital Status**   | Married or Partnered / Never Married / Previously Married | 63 / 23 / 14          |
+| **Education**        | High school or less / College or trades / University      | 15 / 30 / 55          |
+| **Income Group**     | Under 25k / 25k–50k / 50k–90k / 90k+                      | 13 / 16 / 32 / 39     |
+| **Visible Minority** | Yes / No                                                  | 20 / 80               |
+| **Religion**         | Christian / No religion / Other religion                  | 50 / 36 / 14          |
+
+**Table 1** provides a numerical summary of these variables within the cleaned CES dataset. The sample closely resembles the national demographic structure, with somewhat higher representation among individuals aged 50 and above. Roughly 55% of respondents hold a university degree, and 39% report household incomes above \$90,000. Visible minority respondents constitute approximately 20% of the sample, and about one-third of respondents report no religious affiliation. These distributions provide important context for interpreting the modeling results, as sociodemographic imbalances may influence predicted voting probabilities.
+
+```{r, echo = FALSE,  include=FALSE}
+
+# Use this to create some plots. Should probably describe both the sample and population.
+
+# --- Figure 1: Province distribution ---
+ggplot(survey_clean, aes(x = province)) +
+  geom_bar(fill = "darkgrey") +
+  theme_minimal(base_size = 12) +
+  labs(
+    title = "Figure 1. Distribution of CES Respondents by Province (CES 2021)",
+    x = "Province or Territory",
+    y = "Number of Respondents"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", size = 13)
+  )
+
+```
+
+<!-- **Figure 1** illustrates the distribution of CES respondents across provinces and territories. The geographic pattern closely reflects Canada’s population structure, with the vastly largest number of respondents residing in Ontario, then Quebec, Alberta, and British Columbia, while smaller provinces and the Northern territories contribute fewer observations. Displaying this distribution helps highlight regional variation in the survey and confirms that the dataset contains adequate representation for analyzing province-level voting patterns. -->
+
+```{r, echo = FALSE, include=FALSE}
+ggplot(census_clean, aes(x = province)) +
+  geom_bar(fill = "#8FB996") +   # muted green
+  theme_minimal(base_size = 12) +
+  labs(
+    title = "Figure 2. Population Distribution by Province (Census 2021)",
+    x = "Province or Territory",
+    y = "Population Count"
+  ) +
+  scale_y_continuous(labels = scales::comma) +   # <-- FIX scientific notation
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold")
+  )
+```
+
+<!-- **Figure 2** displays the population distribution across provinces and territories using the 2021 Canadian Census. Reflecting the distribution of CES respondents, Ontario accounts for the largest share of Canada’s population, followed by Quebec, British Columbia, and Alberta. In contrast, the Atlantic provinces and the territories represent much smaller proportions of the national population. Including this figure allows us to visually compare the true population structure with the CES sample shown in Figure 1. While not perfectly proportional, the CES sample reflects the broad regional pattern of Canada’s population, supporting the validity of province-level comparisons in the subsequent analysis. -->
+
+```{r fig.height=4, fig.width=7, echo = FALSE}
+
+# Helper function to add bottom-centered label
+add_bottom_label <- function(plot, label) {
+  plot + 
+    annotate("text", x = Inf, y = -Inf, label = label, vjust = 11, hjust = 10, size = 4) +
+    coord_cartesian(clip = "off")  # allow label outside plotting area
+}
+
+# --- Plot 1: CES sample distribution ---
+p1 <- ggplot(survey_clean, aes(x = province)) +
+  geom_bar(fill = "darkgrey") +
+  theme_minimal() +
+  labs(
+    title = "CES Respondent Distribution",
+    x = "Province/Territory",
+    y = "Number of Respondents"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+  )
+
+# --- Plot 2: Census population distribution ---
+p2 <- ggplot(census_clean, aes(x = province)) +
+  geom_bar(fill = "#8FB996") +
+  theme_minimal() +
+  labs(
+    title = "Population Distribution",
+    x = "Province/Territory",
+    y = "Population Count"
+  ) +
+  scale_y_continuous(labels = scales::comma) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+  )
+
+# Add bottom-centered tags "(i)" and "(ii)"
+p1_tagged <- add_bottom_label(p1, "(i)")
+p2_tagged <- add_bottom_label(p2, "(ii)")
+
+# --- Combine the two plots into one figure ---
+(p1_tagged | p2_tagged) +
+  plot_annotation(
+    title = "Figure 1. Sample and Population Distribution by Province",
+    theme = theme(plot.title = element_text(face = "bold", hjust = 0.5)),
+  )
+```
+**Figure 1** illustrates the distribution of CES respondents and the population distribution across provinces and territories. Subfigure (i) shows the geographic pattern of CES respondents, which closely reflects Canada's population structure, with the vastly largest number of respondents residing in Ontario, then Quebec, Alberta, and British Columbia, while smaller provinces and the Northern territories contribute fewer observations. Displaying this distribution helps highlight regional variation in the survey and confirms that the dataset contains adequate representation for analyzing province-level voting patterns. Subfigure (ii) displays the population distribution across provinces and territories using the 2021 Canadian Census. Reflecting the distribution of CES respondents, Ontario accounts for the largest share of Canada's population, followed by Quebec, British Columbia, and Alberta. In contrast, the Atlantic provinces and the territories represent much smaller proportions of the national population. Including this subfigure allows us to visually compare the true population structure with the CES sample shown in subfigure (i). While not perfectly proportional, the CES sample reflects the broad regional pattern of Canada's population, supporting the validity of province-level comparisons in the subsequent analysis.
+
+```{r fig.width=6, fig.height=2.5, echo = FALSE}
+
+ggplot(survey_clean, aes(x = vote_choice, fill = vote_choice)) +
+  geom_bar() +
+  scale_fill_manual(
+    values = c(
+      "Liberal" = "brown1",
+      "Conservative" = "cornflowerblue",
+      "NDP" = "orange"
+    )
+  ) +
+  theme_minimal(base_size = 10) +
+  labs(
+    title = "Figure 2. Distribution of CES Respondents' Vote Choice (CES 2021)",
+    x = "Party",
+    y = "Number of Respondents"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", size = 11),
+    legend.position = "none"
+  )
+```
+
+**Figure 2** shows the distribution of vote choice among respondents. The sample is reasonably balanced across the three major federal parties, with 1,700 respondents intending to vote Liberal, 1,552 intending to vote Conservative, and 1,183 intending to vote NDP. This variation ensures that the multinomial logistic regression estimated in Section 3 has sufficient information to model differences across parties.
+
+Taken together, the cleaned CES and census datasets form a robust foundation for estimating the probability that an individual with a given demographic profile supports the Liberal, Conservative, or NDP parties. The demographic summaries in this section establish the groundwork for the modeling and post-stratification procedures that follow in Section 3, where these variables are used to predict vote choice across the Canadian population.
+
+# 3 Methods
+
+The objective of this analysis is to predict the national popular vote for the three major federal parties (Liberal, Conservative, NDP) by fitting a model to the survey data and then correcting for the non-representativeness of that sample using population data. This process involves two core methodologies: **Multinomial Logistic Regression (MLR)** to model individual vote choice, and **Post-Stratification (PS)** to aggregate the predictions to the entire Canadian population. The analysis was programmed using `R version 4.0.2`.
+
+## 3.1 Model Specifics
+
+The primary statistical tool used is **Multinomial Logistic Regression**, which is an extension of binary logistic regression for outcomes with three or more unordered categories. This model is justified because the dependent variable, **vote_choice**, has three distinct and non-ordinal outcomes (Liberal, Conservative, NDP). A single MLR model is statistically superior to running three separate binary logistic regressions, as it forces the predicted probability of voting for all parties for any individual to sum to $1$, which is crucial for an accurate popular vote estimate. We set the **New Democratic Party (NDP)** as the reference category
+
+The model estimates the natural logarithm of the odds (the **logit**) of choosing party $j$ over the reference party $k$ (NDP) as a linear combination of the eight demographic predictors $X_m$. The model is represented by the following equation:
+
+$$
+\ln \left( \frac{\pi_{ij}}{\pi_{ik}} \right) = \beta_{j0} + \sum_{m=1}^{8} \beta_{jm} X_{im}
+$$
+
+Where:
+
+-   $\pi_{ij}$ is the probability that an individual $i$ chooses party $j$ (Liberal or Conservative).
+
+-   $\pi_{ik}$ is the probability that individual $i$ chooses the reference party $k$ (NDP).
+
+-   $X_{im}$ are the eight demographic and socioeconomic predictors (e.g., age group, education).
+
+-   The **parameters of interest** are the coefficients ($\beta_{jm}$), which represent the change in the log-odds (relative log-odds) of choosing party $j$ over the NDP for a one-unit change in a specific predictor $X_m$.
+
+The key **assumption** for this model is the **Independence of Irrelevant Alternatives (IIA)**, which states that the odds of choosing one category over another are unaffected by the presence or absence of additional categories. In the context of a three-party system, this assumes that if the NDP were removed, the relative preference between Liberal and Conservative would remain unchanged. This is a common, yet imperfect, assumption in political modeling.
+
+```{r, include=FALSE}
+
+# --- Creating the Multinomial Logistic Regression Model ---
+
+# The multinomial model for the three-way vote choice (Liberal, Conservative, NDP)
+# We use the 'survey_clean' data defined in Section 2
+# The variables are: province, age_group, marital_status, gender, education, income_group, visible_minority, religion
+
+# Set NDP as the reference category for interpretation
+survey_clean$vote_choice <- relevel(as.factor(survey_clean$vote_choice), ref = "NDP")
+
+# Fit the Multinomial Logistic Regression Model
+model <- multinom(vote_choice ~ province + age_group + marital_status + gender + education + income_group + visible_minority + religion, data = survey_clean)
+```
+
+## 3.2 Post-Stratification
+
+**Post-Stratification** is a weighting technique that adjusts estimates from a sample to match the known population totals from an external source, in this case, the Canadian Census. In non-statistical terms, the MLR model gives us a "best guess" for how a person with a specific demographic profile will vote; the PS step then takes all these "best guesses" and weights them by how many people with that exact profile actually exist in Canada. This corrects for the inevitable sampling and non-response biases inherent in any survey.
+
+This procedure involves partitioning the entire Canadian population into mutually exclusive **cells** (or strata) defined by the unique combinations of the eight demographic variables (province, age group, etc.).
+
+The **eight variables** used to create these cells—all categorical and harmonized between the CES survey and the Census (as detailed in Section 2)—were chosen because they are consistently strong predictors of vote choice in Canada, including **Province** (critical for regional differences) and **Income/Education** (for socioeconomic factors). By including these variables, the PS process ensures that the final national prediction is proportional to the true demographic makeup of the electorate.
+
+The final **post-stratified estimate** for the popular vote proportion for party $j$, denoted as $\hat{Y}^{PS}_j$, is calculated by summing the model's prediction for each cell ($\hat{\pi}_{c j}$) weighted by the Census population count for that cell ($N_c$):
+
+$$
+\hat{Y}^{PS}_j = \frac{\sum_{c=1}^{C} N_c \cdot \hat{\pi}_{c j}}{\sum_{c=1}^{C} N_c}
+$$
+
+The utility of $\hat{Y}^{PS}_j$ is that it directly provides a final popular vote proportion that is adjusted to reflect the known characteristics of the national population, addressing the limitations of relying solely on the survey sample.
+
+All analysis for this report was programmed using `R version 4.0.2` \[2\].
+
+# 4 Results
+
+```{r, echo=FALSE}
+coef_table <- broom::tidy(model) %>%
+  filter(term != "(Intercept)") %>%
+  filter(
+    grepl("^age_group", term) |
+    grepl("^religion", term) |
+    grepl("^education", term)
+    ) %>% 
+  mutate(
+    term = gsub("age_group", "Age: ", term),
+    term = gsub("education", "Education: ", term),
+    term = gsub("religion", "Religion: ", term)
+  )
+
+knitr::kable(coef_table, caption = "Multinomial Logistic Regression Coefficients (Relative to NDP)")
+```
+
+**Table 2** summarizes the estimated coefficients from the **multinomial logistic regression model** predicting vote choice between the **Liberal Party, Conservative Party,** and the **New Democratic Party (NDP).** Because the NDP is the reference category, all coefficients represent the change in the log-odds of choosing either the Liberal Party or the Conservative Party instead of the NDP for a one-unit change in the predictor.
+
+Several clear patterns emerge. First, age strongly differentiates voting behaviour: older respondents (especially those aged 50–64 and 65+) exhibit substantially higher odds of choosing either the Liberals or Conservatives over the NDP. Education also plays a prominent role—university-educated respondents are more likely to vote Liberal, while those with only high school education lean modestly toward the Conservatives. Religion is among the most influential predictors, with Christian respondents showing higher odds of Conservative support, while Muslim and Hindu respondents show higher Liberal support. Regional differences are also strongly pronounced; for example, respondents in Quebec and Prince Edward Island show significantly higher likelihoods of voting Liberal relative to the NDP.
+
+While the full table contains many coefficients, the general structure reveals an intuitive and theoretically consistent political landscape: socioeconomic factors, province, and religious identity all meaningfully shape partisan preferences in Canada. The full table is available in the appendix to be viewed.
+
+```{r fig.height=6, fig.width=7, echo = FALSE}
+
+coef_df <- tidy(model) %>%
+  filter(term != "(Intercept)") %>%
+  mutate(
+    term = gsub("province", "Province: ", term),
+    term = gsub("age_group", "Age: ", term),
+    term = gsub("marital_status", "Marital: ", term),
+    term = gsub("gender", "Gender: ", term),
+    term = gsub("education", "Education: ", term),
+    term = gsub("income_group", "Income: ", term),
+    term = gsub("visible_minority", "Visible Minority: ", term),
+    term = gsub("religion", "Religion: ", term)
+  )
+
+ggplot(coef_df, aes(estimate, term, colour = y.level)) +
+  geom_vline(xintercept = 0, linetype = "dashed", colour = "grey40") +
+  geom_point(position = position_dodge(width = 0.6), size = 2) +
+  geom_errorbarh(
+    aes(xmin = estimate - std.error,
+        xmax = estimate + std.error),
+    height = 0.2,
+    position = position_dodge(width = 0.6)
+  ) +
+  theme_minimal(base_size = 10) +
+  labs(
+    title = "Figure 4. MLR Coefficients (Log-Odds Relative to NDP)",
+    x = "Coefficient Estimate (Log-Odds)",
+    y = "Predictor",
+    colour = "Party"
+  ) +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    legend.position = "bottom"
+  )
+```
+
+**Figure 4** visualizes the multinomial regression coefficients for the Liberal and Conservative parties relative to the NDP, accompanied by their corresponding 95% confidence intervals. The dashed vertical line indicates zero, allowing for easy identification of which predictors have statistically meaningful effects on vote choice.
+
+This graphical display reveals the magnitude and direction of the strongest predictors. For example, older age groups show large positive coefficients for both the Liberal and Conservative parties, confirming that younger voters are far more NDP-leaning. Several religious categories exhibit substantial deviations from zero, especially Christians (toward the Conservatives) and Muslims/Hindus (toward the Liberals), highlighting the importance of cultural and identity-based factors. Regionally, Quebec and Prince Edward Island stand out as having strong Liberal leanings relative to the NDP, while provinces like Alberta and Saskatchewan shift voters toward the Conservatives. By presenting the results visually, Figure 5 clarifies the relative strength of each demographic predictor and highlights which factors exert the most influence on partisan choice.
+
+Following the interpretation of the model coefficients, the next step applies the estimated multinomial model to the full Canadian population using post-stratification. This allows the model’s individual-level predictions to be aggregated into national popular vote estimates that reflect the actual demographic structure of Canada.
+
+```{r, include=FALSE}
+
+# --- Post-Stratification Calculation ---
+# Prepare the Census Data for Post-Stratification Cells
+census_data_counts <- census_clean %>%
+  # Group by all 8 variables to form the post-stratification cells
+  group_by(province, age_group, marital_status, gender, education, income_group, visible_minority, religion) %>%
+  summarise(N_c = n(), .groups = 'drop') # N_c is the true population count for the cell
+
+# 2. Predict the Probabilities for Each Cell using the MLR Model
+# The 'predict' function with type="probs" returns a matrix of predicted probabilities for each party
+predicted_probs <- predict(model, newdata = census_data_counts, type = "probs")
+
+# 3. Combine Census Counts with Predicted Probabilities
+census_data_counts <- census_data_counts %>%
+  bind_cols(predicted_probs)
+
+# 4. Calculate the Post-Stratified Estimate (National Popular Vote)
+total_pop <- sum(census_data_counts$N_c)
+
+# Calculate the predicted number of votes for each party (Nc * pi_cj) and sum them
+liberal_predict <- sum(census_data_counts$N_c * census_data_counts$Liberal)
+conservative_predict <- sum(census_data_counts$N_c * census_data_counts$Conservative)
+ndp_predict <- sum(census_data_counts$N_c * census_data_counts$NDP)
+
+# Calculate the final post-stratified popular vote proportion (Y_PS)
+liberal_prop_ps <- liberal_predict / total_pop
+conservative_prop_ps <- conservative_predict / total_pop
+ndp_prop_ps <- ndp_predict / total_pop
+
+# Store results for use in the Results section
+popular_vote_ps <- data.frame(
+  Party = c("Liberal Party", "Conservative Party", "NDP"),
+  Predicted_Proportion = c(liberal_prop_ps, conservative_prop_ps, ndp_prop_ps)
+)
+
+dev <- 8229.092
+aic <- 8353.092
+```
+
+The Multinomial Logistic Regression model was first evaluated using standard goodness-of-fit measures. The fitted model achieves a Residual Deviance of **`r round(dev, 2)`** and an AIC of **`r round(aic, 2)`**, values that are reasonable given the large number of demographic predictors included. Several variables—particularly province, age group, religion, and education—exhibit strong associations with vote choice, reinforcing the patterns visualized earlier in Figure 5.
+
+After estimating the model, predicted probabilities for each party were generated for every unique demographic cell in the Census. These predictions were then weighted by the corresponding Census population counts to produce national-level popular vote estimates. The final post-stratified results are presented in Table 3.
+
+```{r, include=FALSE}
+
+# Format the results table: convert proportions to percentages and round to two decimal places
+results_table <- popular_vote_ps %>%
+  mutate(
+    Predicted_Proportion = round(Predicted_Proportion * 100, 2),
+    Party = factor(Party, levels = c("Liberal Party", "Conservative Party", "NDP"))
+  ) %>%
+  arrange(desc(Predicted_Proportion))
+
+# Calculate the Residual Deviance and AIC for inline R code
+# These values were available in the summary(model) output:
+# Residual Deviance: 8229.092 
+# AIC: 8353.092
+```
+
+```{r, include=FALSE}
+liberal_count_display <- round(liberal_predict)
+conservative_count_display <- round(conservative_predict)
+ndp_count_display <- round(ndp_predict)
+```
+
+#### Table 3: Post-Stratified Popular Vote Prediction (Liberal, Conservative, and NDP)
+
+| Political Party    | Predicted Popular Vote (%)                                                        | Predicted Count                               |
+|------------------|-----------------------------------|-------------------|
+| Liberal Party      | `r results_table$Predicted_Proportion[results_table$Party=="Liberal Party"]`      | `r scales::comma(liberal_count_display)`      |
+| Conservative Party | `r results_table$Predicted_Proportion[results_table$Party=="Conservative Party"]` | `r scales::comma(conservative_count_display)` |
+| NDP                | `r results_table$Predicted_Proportion[results_table$Party=="NDP"]`                | `r scales::comma(ndp_count_display)`          |
+
+The post-stratification results indicate a remarkably competitive national race between the Liberal and Conservative parties. The Liberal Party is predicted to win **`r results_table$Predicted_Proportion[1]`%**, narrowly ahead of the Conservative Party at **`r results_table$Predicted_Proportion[2]`%**, a difference of roughly **`r scales::comma(liberal_count_display - conservative_count_display)`** votes. The NDP earns an estimated **`r results_table$Predicted_Proportion[3]`%**, consistent with its typical third-place national performance.
+
+The razor-thin margin between Liberal and Conservative support—only **`r abs(round(results_table$Predicted_Proportion[1] - results_table$Predicted_Proportion[2], 2))`** percentage points—closely mirrors the actual results of the 2021 federal election, where the Liberal popular vote margin was 1.7 points. This provides evidence that demographic composition alone, combined with statistical modelling, is capable of reproducing much of the observed national voting behaviour.
+
+```{r, fig.width=6, fig.height=2.5, echo=FALSE}
+# --- Figure 5: Predicted Popular Vote Distribution ---
+ggplot(results_table, aes(x = Party, y = Predicted_Proportion, fill = Party)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(aes(label = paste0(Predicted_Proportion, "%")), vjust = -0.5, size = 4) +
+  scale_fill_manual(
+    values = c("Liberal Party" = "brown1", "Conservative Party" = "cornflowerblue", "NDP" = "orange")
+  ) +
+  scale_y_continuous(limits = c(0, 45), breaks = seq(0, 45, 5), name = "Predicted Popular Vote (%)") +
+  theme_minimal() +
+  labs(
+    title = "Figure 5. Post-Stratified Predicted National Popular Vote",
+    x = "Political Party"
+  ) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+```
+
+**Figure 5** provides a visual summary of the post-stratified popular vote predictions. The bar chart clearly displays the extremely narrow gap between Liberal and Conservative support, while also highlighting the NDP’s distinct third-place position. The close correspondence between the model’s predictions and the historical 2021 outcome underscores the effectiveness of combining multinomial logistic regression with post-stratification for national vote estimation.
+
+# 5 Discussion
+
+This analysis successfully predicted the 2021 federal election popular vote using MLR combined with post-stratification to adjust for sampling bias. The model estimated the Liberal Party would receive 33.24% of the vote compared to 33.13% for the Conservatives. This result closely mirrors the actual election, where the Liberals won the popular vote by 1.7 points, demonstrating that demographic factors alone can effectively capture national voting patterns. The findings reveal that age, religion, and province are particularly strong predictors of partisan choice, consistent with existing understanding of Canadian political behaviour. Several limitations should be noted. The MLR assumes the Independence of Irrelevant Alternatives (IIA), meaning the choice between two parties is unaffected by the presence of a third party; however, research shows this assumption may not hold reliably in practice (Cheng & Long, 2007). While post-stratification corrects for known demographic imbalances, unmeasured factors like political engagement or media exposure could still introduce bias. Despite these concerns, the results align with broader findings that post-stratification methods can transform non-representative survey samples into accurate population estimates (Wang et al., 2015). Future work could improve predictions by including additional variables such as urban/rural residence or immigration status, or by using alternative models that relax the IIA assumption. Overall, this study demonstrates that combining survey data with census information through sound statistical methods produces reliable insights into how demographics shape electoral outcomes in Canada.
+
+
+\newpage
+
+# 6 Generative AI Statement
+
+Our group used generative AI tools, including ChatGPT, to support the writing and formatting stages of this assignment. Specifically, we used AI to help refine the clarity of written sections, adjust tone for consistency, and generate cleaner wording for transitions between paragraphs. We also used AI to help structure parts of the Introduction, Discussion, and Ethics sections so that they aligned with the expectations of the rubric and the assignment instructions. Additionally, we used ChatGPT to help identify the patchwork package, which we then used to format Figure 1 by combining two ggplots into a single figure. At no point did we use AI to produce statistical analysis, run code, interpret model outputs, or make methodological decisions; all modeling choices, data cleaning steps, and analytical reasoning were completed entirely by our group.
+
+To ensure the final work reflects our own understanding of the course material, we carefully reviewed, edited, and rewrote every AI-assisted paragraph. All statistical explanations, descriptions of post-stratification, the multinomial logistic regression model, and the interpretation of results were written by group members based on our knowledge from lectures, tutorials, and the course textbook. Whenever AI-generated text was used as a starting point, we substantially revised it to ensure accuracy and alignment with our analysis. We also verified that all terminology, assumptions, and explanations were consistent with STA304 concepts, and we only included material we fully understood and could explain independently.
+
+Overall, generative AI served as a supplementary writing tool rather than a substitute for our own work. All code, modeling decisions, interpretation of results, and final edits were developed collaboratively within the group, ensuring that the completed report reflects our own analytical reasoning and understanding of the course content.
+
+# 7 Ethics Statement
+
+Reproducibility was ensured throughout this analysis by documenting all code, data transformations, and modeling decisions in a transparent and structured manner. All R scripts were clearly annotated with comments explaining each step of the data cleaning, variable harmonization, model estimation, and post-stratification process. The Data and Methods sections provide detailed descriptions of how variables were recoded, which demographic categories were used, and the exact model specification employed, ensuring that independent researchers could replicate the analysis given access to the same public datasets. By adhering to established statistical methods such as multinomial logistic regression and post-stratification and providing explicit justification for variable selection and modeling choices, this report follows standard practices in quantitative social science research that prioritize transparency and replicability.
+
+Regarding Research Ethics Board (REB) approval, this analysis does not require ethics review because it relies exclusively on publicly available, de-identified secondary data from the 2021 Canadian Election Study (CES) and the 2021 Canadian Census. According to the Tri-Council Policy Statement on ethical conduct for research involving humans, research using publicly available datasets that are de-identified such that individuals cannot be identified does not require REB review (TCPS2 2022). The CES data was collected by the original research team with appropriate informed consent and ethical oversight, and all personally identifying information was removed prior to public release. Similarly, Census data is aggregated and anonymized by Statistics Canada. No individual survey respondent can be identified from the results presented in this report, as all findings are reported at aggregate levels (national popular vote estimates) or across broad demographic categories. While one might argue that reporting voting patterns by religion or visible minority status could theoretically contribute to stereotyping of certain groups, the analysis focuses on population-level patterns rather than singling out individuals or small identifiable groups, and the variables analyzed are standard sociodemographic factors commonly used in political science research. Consequently, this work can be made publicly available without additional REB approval.
+
+# 8 Bibliography
+
+1.  Cheng, Simon, and J. Scott Long. 2007. "Testing for IIA in the Multinomial Logit Model." Sociological Methods & Research 35 (4): 583–600.
+
+2.  OpenAI. 2025. ChatGPT (GPT-5). Large language model. November 20, 2025. https://chat.openai.com/.
+
+3.  Statistics Canada. 2022. Census Profile, 2021 Census of Population. Statistics Canada Catalogue no. 98-316-X2021001. Ottawa. Released February 9, 2022. Accessed November 20, 2025. https://www12.statcan.gc.ca/census-recensement/2021/dp-pd/prof/index.cfm?Lang=E.
+
+4.  Stephenson, Laura B., Allison Harell, Daniel Rubenson, and Peter John Loewen. 2022. "2021 Canadian Election Study (CES)." Harvard Dataverse, V1.
+
+5.  TCPS2. 2022. Ethical Conduct for Research Involving Humans. Canadian Institutes of Health Research, Natural Sciences and Engineering Research Council of Canada, and Social Sciences and Humanities Research Council of Canada.
+
+6.  Wang, Wei, David Rothschild, Sharad Goel, and Andrew Gelman. 2015. "Forecasting Elections with Non-Representative Polls." International Journal of Forecasting 31 (3): 980–991.
+
+# 9 Appendix
+
+Below is the full summary table of the coefficients from the MLR. 
+```{r, echo = FALSE}
+coef_table <- broom::tidy(model) %>%
+  filter(term != "(Intercept)") %>%
+  mutate(
+    term = gsub("province", "Province: ", term),
+    term = gsub("age_group", "Age: ", term),
+    term = gsub("marital_status", "Marital: ", term),
+    term = gsub("gender", "Gender: ", term),
+    term = gsub("education", "Education: ", term),
+    term = gsub("income_group", "Income: ", term),
+    term = gsub("visible_minority", "Visible Minority: ", term),
+    term = gsub("religion", "Religion: ", term)
+  )
+
+knitr::kable(coef_table, caption = "Multinomial Logistic Regression Coefficients (Relative to NDP)")
+```
