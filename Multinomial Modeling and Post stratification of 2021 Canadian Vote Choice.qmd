@@ -1,8 +1,7 @@
 ---
 title: "Multinomial Modeling and Post-Stratification of 2021 Canadian Vote Choice"
-author: "Kaamil Shaikh, Ibrahim Nabi, Raihan Amin"
+author: "Raihan Amin"
 date: November 13, 2025
-subtitle: STA304 - Assignment 2
 format: pdf
 editor: visual
 toc: true
@@ -583,21 +582,13 @@ This analysis successfully predicted the 2021 federal election popular vote usin
 
 \newpage
 
-# 6 Generative AI Statement
-
-Our group used generative AI tools, including ChatGPT, to support the writing and formatting stages of this assignment. Specifically, we used AI to help refine the clarity of written sections, adjust tone for consistency, and generate cleaner wording for transitions between paragraphs. We also used AI to help structure parts of the Introduction, Discussion, and Ethics sections so that they aligned with the expectations of the rubric and the assignment instructions. Additionally, we used ChatGPT to help identify the patchwork package, which we then used to format Figure 1 by combining two ggplots into a single figure. At no point did we use AI to produce statistical analysis, run code, interpret model outputs, or make methodological decisions; all modeling choices, data cleaning steps, and analytical reasoning were completed entirely by our group.
-
-To ensure the final work reflects our own understanding of the course material, we carefully reviewed, edited, and rewrote every AI-assisted paragraph. All statistical explanations, descriptions of post-stratification, the multinomial logistic regression model, and the interpretation of results were written by group members based on our knowledge from lectures, tutorials, and the course textbook. Whenever AI-generated text was used as a starting point, we substantially revised it to ensure accuracy and alignment with our analysis. We also verified that all terminology, assumptions, and explanations were consistent with STA304 concepts, and we only included material we fully understood and could explain independently.
-
-Overall, generative AI served as a supplementary writing tool rather than a substitute for our own work. All code, modeling decisions, interpretation of results, and final edits were developed collaboratively within the group, ensuring that the completed report reflects our own analytical reasoning and understanding of the course content.
-
-# 7 Ethics Statement
+# 6 Ethics Statement
 
 Reproducibility was ensured throughout this analysis by documenting all code, data transformations, and modeling decisions in a transparent and structured manner. All R scripts were clearly annotated with comments explaining each step of the data cleaning, variable harmonization, model estimation, and post-stratification process. The Data and Methods sections provide detailed descriptions of how variables were recoded, which demographic categories were used, and the exact model specification employed, ensuring that independent researchers could replicate the analysis given access to the same public datasets. By adhering to established statistical methods such as multinomial logistic regression and post-stratification and providing explicit justification for variable selection and modeling choices, this report follows standard practices in quantitative social science research that prioritize transparency and replicability.
 
 Regarding Research Ethics Board (REB) approval, this analysis does not require ethics review because it relies exclusively on publicly available, de-identified secondary data from the 2021 Canadian Election Study (CES) and the 2021 Canadian Census. According to the Tri-Council Policy Statement on ethical conduct for research involving humans, research using publicly available datasets that are de-identified such that individuals cannot be identified does not require REB review (TCPS2 2022). The CES data was collected by the original research team with appropriate informed consent and ethical oversight, and all personally identifying information was removed prior to public release. Similarly, Census data is aggregated and anonymized by Statistics Canada. No individual survey respondent can be identified from the results presented in this report, as all findings are reported at aggregate levels (national popular vote estimates) or across broad demographic categories. While one might argue that reporting voting patterns by religion or visible minority status could theoretically contribute to stereotyping of certain groups, the analysis focuses on population-level patterns rather than singling out individuals or small identifiable groups, and the variables analyzed are standard sociodemographic factors commonly used in political science research. Consequently, this work can be made publicly available without additional REB approval.
 
-# 8 Bibliography
+# 7 Bibliography
 
 1.  Cheng, Simon, and J. Scott Long. 2007. "Testing for IIA in the Multinomial Logit Model." Sociological Methods & Research 35 (4): 583–600.
 
@@ -611,7 +602,7 @@ Regarding Research Ethics Board (REB) approval, this analysis does not require e
 
 6.  Wang, Wei, David Rothschild, Sharad Goel, and Andrew Gelman. 2015. "Forecasting Elections with Non-Representative Polls." International Journal of Forecasting 31 (3): 980–991.
 
-# 9 Appendix
+# 8 Appendix
 
 Below is the full summary table of the coefficients from the MLR. 
 ```{r, echo = FALSE}
